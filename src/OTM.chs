@@ -147,11 +147,11 @@ startTransaction = do
 readOTVar:: OTVar a -> OTM a
 readOTVar var = do
     otrec <- get
-    v <- liftIO . otmReadOTVar otrec var >>= liftIO . deRefStablePtr
+    v <- liftIO $ do otmReadOTVar otrec var >>= deRefStablePtr
     return v
 
 writeOTVar:: OTVar a -> a -> OTM ()
 writeOTVar var value = do
         otrec <- get
-        s1 <- liftIO newStablePtr value
-        liftIO otmWriteOTVar otrec var s1
+        s1 <- liftIO $ newStablePtr value
+        liftIO $ otmWriteOTVar otrec var s1
