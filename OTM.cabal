@@ -18,6 +18,10 @@ library
   exposed-modules:     OTM, Lib
   build-depends:       base >= 4.7 && < 5
                      , mtl >= 2.2.1
+  other-extensions:    ForeignFunctionInterface,
+                       TypeSynonymInstances,
+                       GeneralizedNewtypeDeriving,
+                       ScopedTypeVariables
   build-tools:         c2hs
   default-language:    Haskell2010
   C-sources:           cbits/OTM.c
