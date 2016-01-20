@@ -20,7 +20,7 @@ import Data.Typeable        -- class Typeable a
 -- import Control.Monad        -- >=>
 import Data.Word            -- Mapping of HsWord
 import Foreign
-import Foreign.Concurrent -- newForeignPtr with arbitrary IO actions
+import Foreign.Concurrent   -- newForeignPtr with arbitrary IO actions
 import Foreign.StablePtr
 import Foreign.ForeignPtr
 import Foreign.Storable
@@ -54,16 +54,19 @@ foreign import ccall "dynamic"
 foreign import ccall unsafe "otmNewOTVar" otmNewOTVar :: StablePtr a -> IO (Ptr (OTVar a))
 foreign import ccall unsafe "otmDeleteOTVar" otmDeleteOTVar :: Ptr (OTVar a) -> IO ()
 
-newOTVar :: a -> IO (OTVar a)
-newOTVar a = do
+newOTVarIO:: a -> IO (OTVar a)
+newOTVarIO a = do
     value <- newStablePtr a
     ptr <- otmNewOTVar value
     -- finalizer <- mkFinalizer deleteOTVar
     fptr <- Foreign.Concurrent.newForeignPtr ptr $ deleteOTVar ptr
     return $ OTVar fptr
 
+newOTVar:: a -> OTM (OTVar a)
+newOTVar = liftIO . newOTVarIO
+
 -- TODO: add throwTo before deleting OTVar
-deleteOTVar :: Ptr (OTVar a) -> IO ()
+deleteOTVar:: Ptr (OTVar a) -> IO ()
 deleteOTVar ptr = do
     otmDeleteOTVar ptr
 -- ThrowTo BlockIndefinitelyOnOTM
@@ -178,4 +181,19 @@ writeOTVar var value = do
         liftIO $ otmWriteOTVar otrec var s1
 
 retry:: OTM ()
-retry = throw RetryException
+retry = throwError RetryException
+
+abort:: OTM ()
+abort = liftIO $ do
+    evaluate (5 `div` 0) :: IO Int
+    return ()
+
+atomic:: forall a . OTM a -> IO () -- (Either SomeException (Either RetryException a))
+atomic otm = do
+    otrec <- startTransaction
+    result <- try $ runOTM otm otrec :: IO (Either SomeException (Either RetryException a))
+    case result of
+        Left _ -> putStrLn "Abort!"
+        Right computation ->  case computation of
+            Left _ -> putStrLn "Retry!"
+            Right _ -> putStrLn "Committ!"

@@ -5,6 +5,15 @@ import OTM
 import Foreign.StablePtr
 main :: IO ()
 main = do
+    atomic $ do
+        otvar <- newOTVar 5
+        writeOTVar otvar 10
+        v <- readOTVar otvar
+        return v
+    atomic $ do
+        retry
+    atomic $ do
+        abort
     --someFunc
     --trec <- startTransaction
     --let a = Just 5
@@ -21,4 +30,3 @@ main = do
     --else putStrLn "Not Equal!"
     --f <- readOTVar trec v
     --g <- writeOTVar trec v 5
-    putStrLn "Nuova OTVAR!"
