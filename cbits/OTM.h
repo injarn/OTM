@@ -176,6 +176,10 @@ struct OTRecHeader_ {
 
 
 HsBool compareStablePtr(HsStablePtr s1, HsStablePtr s2);
+
+/* Union-Find */
+OTRecHeader* find(OTRecHeader* trec);
+
 OTRecHeader* otmStartTransaction(HsStablePtr thread_id, OTRecHeader* outer);
 HsStablePtr otmGetThreadId(OTRecHeader* otrec);
 OTVar* otmNewOTVar(HsStablePtr value);

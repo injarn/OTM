@@ -2,6 +2,7 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 #include "OTM.h"
 module OTM {- (
@@ -10,6 +11,7 @@ module OTM {- (
     otmStartTransaction) -}where
 
 import Control.Concurrent   -- ThreadId
+import Control.Applicative  -- <$>, <*>
 import Control.Monad.State  -- StateT
 import Control.Monad.Except -- ExceptT
 import Control.Exception
@@ -75,6 +77,7 @@ deleteOTVar ptr = do
 -- TODO: OTRec needs a finalizer
 {#pointer *OTRecHeader as OTRec foreign newtype#}
 
+{#fun unsafe find {`OTRec'} -> `OTRec' #}
 --data OTState = 
 --    OtrecLocked Word
 --    | OtrecRunning Word
@@ -88,7 +91,23 @@ deleteOTVar ptr = do
 --    | OtrecCondemned
 
 {#enum OTState {underscoreToCase} deriving (Eq)#}
-{#pointer *OTRecState as OTRecState newtype nocode#}
+
+checkState:: OTM ()
+checkState = do
+    otrec <- get
+    state <- liftIO $ do 
+        otrec <- find otrec
+        toEnum . fromIntegral <$> withOTRec otrec {#get OTRecHeader->state.state #}
+    case state of
+        OtrecRetry -> retry
+        OtrecAbort -> liftIO $ do
+            ptr <- withOTRec otrec {#get OTRecHeader->state.exception #} 
+            exp::SomeException <- deRefStablePtr . castPtrToStablePtr $ ptr
+            throw exp
+        _ -> do return ()
+
+
+--{#pointer *OTRecState as OTRecState newtype nocode#}
 --stateOutMarshaller :: Ptr OTRecState -> IO (OTRecState)
 --stateOutMarshaller ptr = do
 --    s <- liftM . toEnum $ {#get OTRecState->state#} ptr
@@ -146,12 +165,17 @@ startTransaction = do
 
 readOTVar:: OTVar a -> OTM a
 readOTVar var = do
+    checkState
     otrec <- get
     v <- liftIO $ do otmReadOTVar otrec var >>= deRefStablePtr
     return v
 
 writeOTVar:: OTVar a -> a -> OTM ()
 writeOTVar var value = do
+        checkState
         otrec <- get
         s1 <- liftIO $ newStablePtr value
         liftIO $ otmWriteOTVar otrec var s1
+
+retry:: OTM ()
+retry = throw RetryException
