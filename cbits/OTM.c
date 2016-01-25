@@ -93,6 +93,7 @@ void init_OTRecState(OTRecState volatile* state) {
     state -> state = OTREC_RUNNING;
     state -> running = 1;
     state -> threads = 1;
+    state -> exception = NULL;
 }
 
 OTRecChunk* get_new_otrec_chunck();
@@ -366,7 +367,7 @@ HsBool otmUnion(OTRecHeader* trec1, OTRecHeader* trec2){
         x_s = lock_OTRec(x);
         y_s = lock_OTRec(y);
         if (!((x_s & y_s) & OTREC_RUNNING)) {
-            // If not both transaction are running
+            // If both transaction are not running
             unlock_OTRec(y, y_s);
             unlock_OTRec(x, x_s);
             return 0;
@@ -386,7 +387,7 @@ HsBool otmUnion(OTRecHeader* trec1, OTRecHeader* trec2){
     } while (!result);
     // append working memory of x to the working memory of y
     // without locking
-    link_trec_chuncks(x -> current_chunk, y -> current_chunk);
+    // link_trec_chuncks(x -> current_chunk, y -> current_chunk);
     return 1;
 }
 
@@ -759,10 +760,10 @@ void itmWriteOTVar(OTRecHeader* trec, OTVar* otvar, HsStablePtr new_value) {
 
 // TODO: How about num_updates of delta and OTVar?
 void otm_commit_working_memory(OTRecHeader* trec) {
-    assert(trec -> state.state & OTREC_COMMIT);
     OTVar *otvar;
     OTVarDelta* old;
     FOR_EACH_ENTRY(trec, e, {
+        TRACE("ENTRY FOR_EACH_ENTRY LOOP");
         otvar = e -> otvar;
         // The otvar is locked until otvar -> delta becames NULL
         // So other transactions will not read from current_value
@@ -771,11 +772,11 @@ void otm_commit_working_memory(OTRecHeader* trec) {
         old = (OTVarDelta*)xchg((StgPtr)&otvar -> delta, (StgWord)NULL);
         release_otm_stable_ptr(old -> new_value);
         free(old);
+        TRACE("END FOR_EACH_ENTRY LOOP");
     });
 }
 
 void otm_free_working_memory(OTRecHeader* trec) {
-    assert(trec -> state.state & (OTREC_RETRY | OTREC_ABORT));
     OTVar *otvar;
     OTVarDelta* old;
     FOR_EACH_ENTRY(trec, e, {
@@ -789,26 +790,31 @@ void otm_free_working_memory(OTRecHeader* trec) {
 
 void otm_end_transaction(OTRecHeader* trec) {
     OTRecHeader* root = find(trec);
-    OTState final_state;
-    assert(root -> state.state & (OTREC_COMMIT | OTREC_ABORT | OTREC_RETRY ));
-    final_state = root -> state.state << 3;
-    if (root != trec) {
-        // trec isn't the root transaction
-        // TODO: Discuss about this spinLock
-        while (root -> state.state != final_state) {
-            yieldThread();
-        }
+    OTState final_state, s;
+
+    final_state = lock_OTRec(root);
+    unlock_OTRec(root, final_state);
+    if (final_state == OTREC_COMMIT) {
+        otm_commit_working_memory(trec);
     } else {
-        // trec is the root transaction
-        if (root -> state.state == OTREC_COMMIT) {
-            otm_commit_working_memory(trec);
-        } else {
-            // RETRY or ABORT
-            otm_free_working_memory(trec);
-        }
+        // RETRY or ABORT
+        TRACE("otrec: %p (%p) freeing working memory",   trec, root);
+        assert(final_state & (OTREC_ABORT | OTREC_RETRY ));
+        otm_free_working_memory(trec);
     }
-    root -> state.state = final_state;
-    assert(root -> state.state & (OTREC_COMMITED | OTREC_ABORTED | OTREC_RETRYED));
+
+    s = lock_OTRec(root);
+    assert(s & final_state);
+    assert(s & (OTREC_COMMIT | OTREC_ABORT | OTREC_RETRY ));
+    final_state = s << 3;
+    root -> state.running--;
+    if (root -> state.running == 0) {
+        s = final_state;
+    }
+    unlock_OTRec(root, s);
+    while(!(root -> state.state & final_state)) {
+        busy_wait_nop(); // From SMP.h
+    }
 }
 
 // TODO: Commit without locks
@@ -835,11 +841,13 @@ OTState otmCommit(OTRecHeader* trec) {
         if (s < OTREC_COMMIT) {
             s = OTREC_COMMIT;
         }
+        root -> state.running = root -> state.threads;
         unlock_OTRec(root, s);
     } else {
         unlock_OTRec(root, s);
-        while(find(trec) -> state.state == OTREC_RUNNING) {
-            yieldThread();
+        while(find(trec) -> state.state & (OTREC_RUNNING | OTREC_LOCKED)) {
+            busy_wait_nop();
+            // yieldThread();
         }
     }
 
@@ -863,10 +871,11 @@ OTState otmRetry(OTRecHeader* trec) {
         }
     } while (!valid);
 
-    root -> state.running--;
+    
 
     if (s < OTREC_RETRY) {
         s = OTREC_RETRY;
+        root -> state.running = root -> state.threads;
     }
     unlock_OTRec(root, s);
         
@@ -890,11 +899,13 @@ OTState otmAbort(OTRecHeader* trec, HsStablePtr some_exception) {
         }
     } while (!valid);
 
-    root -> state.running--;
+    
 
     if (s < OTREC_ABORT) {
+        assert(root -> state.exception == NULL);
         s = OTREC_ABORT;
         root -> state.exception = some_exception;
+        root -> state.running = root -> state.threads;
     } else {
         hs_free_stable_ptr(some_exception);
     }
