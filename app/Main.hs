@@ -3,17 +3,20 @@ module Main where
 import Lib
 import OTM
 import Foreign.StablePtr
+import Control.Monad.State -- liftIO
 main :: IO ()
 main = do
     atomic $ do
-        otvar <- newOTVar 5
+        otvar <- newOTVar (5::Integer)
         writeOTVar otvar 10
         v <- readOTVar otvar
+        liftIO $ putStrLn . show $ v
         return v
-    atomic $ do
-        retry
+    putStrLn "End!"
     atomic $ do
         abort
+    atomic $ do
+        retry
     --someFunc
     --trec <- startTransaction
     --let a = Just 5
