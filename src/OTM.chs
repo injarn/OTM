@@ -93,7 +93,14 @@ deleteOTVar ptr = do
 --    | OtrecWaiting
 --    | OtrecCondemned
 
-{#enum OTState {underscoreToCase} deriving (Eq)#}
+{#enum OTState {underscoreToCase} deriving (Eq, Show)#}
+
+propagateException:: OTRec -> IO ()
+propagateException otrec = do
+    root <- find otrec
+    ptr <- withOTRec root {#get OTRecHeader->state.exception #} 
+    exp::SomeException <- deRefStablePtr . castPtrToStablePtr $ ptr
+    throw exp
 
 checkState:: OTM ()
 checkState = do
@@ -103,35 +110,14 @@ checkState = do
         toEnum . fromIntegral <$> withOTRec otrec {#get OTRecHeader->state.state #}
     case state of
         OtrecRetry -> retry
-        OtrecAbort -> liftIO $ do
-            ptr <- withOTRec otrec {#get OTRecHeader->state.exception #} 
-            exp::SomeException <- deRefStablePtr . castPtrToStablePtr $ ptr
-            throw exp
-        _ -> do return ()
+        OtrecAbort -> liftIO . propagateException $ otrec
+        _ -> return ()
 
 
 --{#pointer *OTRecState as OTRecState newtype nocode#}
---stateOutMarshaller :: Ptr OTRecState -> IO (OTRecState)
---stateOutMarshaller ptr = do
---    s <- liftM . toEnum $ {#get OTRecState->state#} ptr
---    case s of
---        OtrecLocked
---        OtrecRunning
---        OtrecCommitt
---        OtrecRetry
---        OtrecAbort
---        OtrecCommitted
---        OtrecRetryed
---        OtrecAborted
---        OtrecWaiting
---        OtrecCondemned
-
-
---newtype ParserT m a = ParserT {unParserT :: StateT AlexInput (ExceptT String m) a}
---  deriving(Monad, MonadState AlexState, MonadError String, Functor, Applicative, MonadIO)
 
 data RetryException = RetryException
- deriving (Show, Typeable)
+    deriving (Show, Typeable)
 
 instance Exception RetryException
 
@@ -158,6 +144,10 @@ getThreadId otrec = do
 {#fun unsafe otmReadOTVar {`OTRec', withOTVar* `OTVar a'} -> `StablePtr a' castPtrToStablePtr#}
 -- TODO: remember to free the returned stableptr
 {#fun unsafe otmWriteOTVar {`OTRec', withOTVar* `OTVar a' , castStablePtrToPtr `StablePtr a' } -> `()' #}
+
+{#fun otmCommit {`OTRec'} -> `OTState' #}
+{#fun otmRetry  {`OTRec'} -> `OTState' #}
+{#fun otmAbort  {`OTRec', castStablePtrToPtr `StablePtr SomeException'} -> `OTState' #}
 
 startTransaction :: IO (OTRec)
 startTransaction = do
@@ -188,12 +178,33 @@ abort = liftIO $ do
     evaluate (5 `div` 0) :: IO Int
     return ()
 
-atomic:: forall a . OTM a -> IO () -- (Either SomeException (Either RetryException a))
+otmHandleTransaction:: OTRec -> OTM a -> OTState -> IO a
+otmHandleTransaction otrec otm state = do
+    case state of
+        OtrecRetryed  -> atomic otm
+        OtrecAborted  -> do
+            root <- find otrec
+            ptr <- withOTRec root {#get OTRecHeader->state.exception #} 
+            exp::SomeException <- deRefStablePtr . castPtrToStablePtr $ ptr
+            throw exp
+        _ -> error "Invalid state" 
+
+
+atomic:: forall a . OTM a -> IO a -- (Either SomeException (Either RetryException a))
 atomic otm = do
     otrec <- startTransaction
     result <- try $ runOTM otm otrec :: IO (Either SomeException (Either RetryException a))
     case result of
-        Left _ -> putStrLn "Abort!"
+        Left se -> do
+            exp <- newStablePtr se
+            state <- otmAbort otrec exp
+            otmHandleTransaction otrec otm state
         Right computation ->  case computation of
-            Left _ -> putStrLn "Retry!"
-            Right _ -> putStrLn "Committ!"
+            Left _ -> do
+                state <- otmRetry otrec
+                otmHandleTransaction otrec otm state
+            Right v -> do
+                state <- otmCommit otrec
+                case state of
+                    OtrecCommited -> return v
+                    _ -> otmHandleTransaction otrec otm state

@@ -86,8 +86,8 @@ typedef struct {
    */
 struct OTRecEntry_ {
     OTVar          *otvar;
-    OtmStablePtr     expected_value;
-    OtmStablePtr     new_value;
+    OtmStablePtr    expected_value;
+    OtmStablePtr    new_value;
     HsInt           num_updates;
 };
 
@@ -110,10 +110,10 @@ typedef struct OTRecChunk_ {
 typedef enum StgWord {
   OTREC_LOCKED      = 1,      /* Transaction record locked */
   OTREC_RUNNING     = 1 << 1, /* Transaction in progress, outcome undecided */
-  OTREC_COMMITT     = 1 << 2, /* Transaction in the state Co< n,l > */
+  OTREC_COMMIT      = 1 << 2, /* Transaction in the state Co< n,l > */
   OTREC_RETRY       = 1 << 3, /* Transaction in the state Re< n,l > */
   OTREC_ABORT       = 1 << 4, /* Transaction in the state Ab< n,l,e > */
-  OTREC_COMMITTED   = 1 << 5, /* Transaction has committed C<>!, now updating tvars */
+  OTREC_COMMITED    = 1 << 5, /* Transaction has committed C<>!, now updating tvars */
   OTREC_RETRYED     = 1 << 6, /* Transaction has retryed R<>!, now reverting tvars */
   OTREC_ABORTED     = 1 << 7, /* Transaction has aborted A<e>!, now reverting tvars */
   OTREC_WAITING     = 1 << 8, /* Transaction currently waiting */
@@ -185,4 +185,7 @@ HsStablePtr otmGetThreadId(OTRecHeader* otrec);
 OTVar* otmNewOTVar(HsStablePtr value);
 HsStablePtr otmReadOTVar(OTRecHeader* trec, OTVar* otvar);
 void otmWriteOTVar(OTRecHeader *trec, OTVar *otvar, HsStablePtr new_value);
+OTState otmCommit(OTRecHeader* trec);
+OTState otmRetry(OTRecHeader* trec);
+OTState otmAbort(OTRecHeader* trec, HsStablePtr some_exception);
 
