@@ -15,8 +15,6 @@
 
 #define FOR_EACH_ENTRY(_t,_x,CODE) do {                                         \
   OTRecHeader *__t = (_t);                                                      \
-  while(__t -> forward_trec != NULL && __t -> forward_trec -> next != __t)      \
-    __t = __t -> forward_trec -> next;                                          \
   OTRecChunk *__c = __t -> current_chunk;                                       \
   StgWord __limit = __c -> next_entry_idx;                                      \
   while (__c != NULL) {                                                         \
@@ -26,13 +24,13 @@
       do { CODE } while (0);                                                    \
     }                                                                           \
     __c = __c -> prev_chunk;                                                    \
-    __limit = __c -> next_entry_idx;                                            \
+    __limit = OTREC_CHUNK_NUM_ENTRIES;                                          \
   }                                                                             \
- exit_for_each:                                                                 \
-  if (0) goto exit_for_each;                                                    \
+ exit_for_each_ ## _x:                                                            \
+  if (0) goto exit_for_each_ ## _x;                                               \
 } while (0)
 
-#define BREAK_FOR_EACH goto exit_for_each
+#define BREAK_FOR_EACH(_x) goto exit_for_each_ ## _x
 
 // returns 1 if the 2 stableptrs refer to the same haskell object
 HsBool compareStablePtr(HsStablePtr s1, HsStablePtr s2) {
@@ -187,7 +185,11 @@ OtmStablePtr read_current_value(OTVar* otvar) {
    otvar -> delta cannot become NULL because delta -> trec cannot commit until
    the transaction who called read_delta_value commits */
 OtmStablePtr read_delta_value(OTVar* otvar) {
-    return otvar -> delta -> new_value;
+    OtmStablePtr result = otvar -> delta -> new_value;
+    while (otvar -> locked) {
+        result = otvar -> delta -> new_value;
+    }
+    return result;
 }
 
 // OTRecHeader* find(OTRecHeader* trec) {
@@ -518,11 +520,22 @@ OTRecEntry* get_entry_for(OTRecHeader* trec, OTVar* otvar, OTRecHeader** in) {
                 if (in != NULL) {
                     *in = trec;
                 }
-                BREAK_FOR_EACH;
+                BREAK_FOR_EACH(e);
             }
         });
         trec = trec -> enclosing_trec;
     } while (result == NULL && trec != NULL);
+    if ((result == NULL) && (otvar -> delta != NULL)) {
+        FOR_EACH_ENTRY(otvar -> delta -> trec, en, {
+            if (en -> otvar == otvar) {
+                result = en;
+                if (in != NULL) {
+                    *in = otvar -> delta -> trec;
+                }
+                BREAK_FOR_EACH(en);
+            }
+        });
+    }
     return result;
 }
 
@@ -653,8 +666,6 @@ HsStablePtr itmReadOTVar(OTRecHeader* trec, OTVar* otvar) {
     OTRecHeader *entry_in = NULL;
     OTRecEntry *entry = NULL;
     assert(trec -> forward_trec == NULL); // trec is isolated
-    OTRecHeader* otrec = find_first_open_transaction(trec);
-    otmReadOTVar(otrec, otvar);
     entry = get_entry_for(trec, otvar, &entry_in);
     assert(entry != NULL);
     if(entry != NULL) {
@@ -664,7 +675,7 @@ HsStablePtr itmReadOTVar(OTRecHeader* trec, OTVar* otvar) {
         } else {
             // Entry found in another trec
             OTRecEntry *new_entry = get_new_entry(trec);
-            if (trec -> forward_trec == NULL) {
+            if (entry_in -> forward_trec == NULL) {
                 // Entry found in an Isolated Transaction
                 new_entry -> otvar = otvar;
                 new_entry -> expected_value = acquire_otm_stable_ptr(entry -> expected_value);
@@ -679,7 +690,7 @@ HsStablePtr itmReadOTVar(OTRecHeader* trec, OTVar* otvar) {
                 result = new_entry -> new_value;
             }
         }
-    } else { // Not possible anymore
+    } else {
         OtmStablePtr current_value = read_current_value(otvar);
         OTRecEntry *new_entry = get_new_entry(trec);
         new_entry -> otvar = otvar;
@@ -700,49 +711,23 @@ void itmWriteOTVar(OTRecHeader* trec, OTVar* otvar, HsStablePtr new_value) {
     if(entry != NULL) {
         if (entry_in == trec) {
             // Entry found in our trec
-            if (compareStablePtr(entry -> expected_value -> ptr, new_value)) {
-                // reuse the OtmStablePtr of expected_value
-                release_otm_stable_ptr(entry -> new_value);
-                entry -> new_value = acquire_otm_stable_ptr(entry -> expected_value);
-            } else if (!compareStablePtr(entry -> new_value -> ptr, new_value)) {
-                // create a new OtmStablePtr for new_value
-                release_otm_stable_ptr(entry -> new_value);
-                entry -> new_value = new_otm_stableptr(new_value);
-            }
+            release_otm_stable_ptr(entry -> new_value);
+            entry -> new_value = new_otm_stableptr(new_value);
         } else {
             // Entry found in another trec
             OTRecEntry *new_entry = get_new_entry(trec);
             if (trec -> forward_trec == NULL) {
                 // Entry found in an Isolated Transaction (enclosing)
-
                 new_entry -> otvar = otvar;
                 new_entry -> expected_value = acquire_otm_stable_ptr(entry -> expected_value);
-
-                if (compareStablePtr(entry -> expected_value -> ptr, new_value)) {
-                    // reuse the OtmStablePtr of expected_value
-                    new_entry -> new_value = acquire_otm_stable_ptr(entry -> expected_value);
-                } else if (compareStablePtr(entry -> new_value -> ptr, new_value)) {
-                    // reuse the OtmStablePtr of new_value
-                    new_entry -> new_value = acquire_otm_stable_ptr(entry -> new_value);
-                } else {
-                    // create a new OtmStablePtr for new_value
-                    new_entry -> new_value = new_otm_stableptr(new_value);
-                }
+                new_entry -> new_value = new_otm_stableptr(new_value);
 
             } else {
                 // Entry found in an Open Tranaction -> Read From Delta Memory
-                // TODO: Link outstanding open transactions
                 OtmStablePtr current_value = read_delta_value(otvar);
                 new_entry -> otvar = otvar;
                 new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
-
-                if (compareStablePtr(new_entry -> expected_value -> ptr, new_value)) {
-                    // reuse the OtmStablePtr of expected_value
-                    new_entry -> new_value = acquire_otm_stable_ptr(new_entry -> expected_value);
-                } else {
-                    // create a new OtmStablePtr for new_value
-                    new_entry -> new_value = new_otm_stableptr(new_value);
-                }
+                new_entry -> new_value = new_otm_stableptr(new_value);
             }
         }
     } else {
@@ -751,13 +736,7 @@ void itmWriteOTVar(OTRecHeader* trec, OTVar* otvar, HsStablePtr new_value) {
         OTRecEntry *new_entry = get_new_entry(trec);
         new_entry -> otvar = otvar;
         new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
-        if (compareStablePtr(new_entry -> expected_value -> ptr, new_value)) {
-            // reuse the OtmStablePtr of expected_value
-            new_entry -> new_value = acquire_otm_stable_ptr(new_entry -> expected_value);
-        } else {
-            // create a new OtmStablePtr for new_value
-            new_entry -> new_value = new_otm_stableptr(new_value);
-        }
+        new_entry -> new_value = new_otm_stableptr(new_value);
     }
 }
 
