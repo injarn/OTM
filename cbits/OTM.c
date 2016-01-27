@@ -619,6 +619,9 @@ HsStablePtr otmReadOTVar(OTRecHeader* trec, OTVar* otvar) {
             return otmReadOTVar(trec, otvar);
         }
     }
+    while(otvar -> locked) {
+        busy_wait_nop();
+    }
     return otvar -> delta -> new_value -> ptr;
 }
 
@@ -634,6 +637,9 @@ void otmWriteOTVar(OTRecHeader *trec, OTVar *otvar, HsStablePtr new_value) {
             return otmWriteOTVar(trec, otvar, new_value);
         } else {
             // the Union was successfull or i was already joined
+            while(otvar -> locked) {
+                busy_wait_nop();
+            }
             OtmStablePtr n_value = new_otm_stableptr(new_value);
             OtmStablePtr old =(OtmStablePtr)xchg((StgPtr)(void*)&(otvar -> delta -> new_value),(StgWord)n_value);
             release_otm_stable_ptr(old);
@@ -814,6 +820,7 @@ void otm_end_finalization(OTRecHeader* trec) {
     }
 }
 
+// Return values: OTREC_COMMITED, OTREC_RETRY, OTREC_ABORTED
 OTState otm_begin_finalization(OTRecHeader* trec, OTState new_state){
     assert(trec -> forward_trec != NULL);
     OTState s;
@@ -861,17 +868,16 @@ OTState otm_begin_finalization(OTRecHeader* trec, OTState new_state){
         return OTREC_RETRYED;
     }
 
-    return find(trec) -> state.state;
+    return s;
 }
-// TODO: Commit without locks
-// Return values: OTREC_COMMITED, OTREC_RETRY, OTREC_ABORTED
+
 OTState otmCommit(OTRecHeader* trec) {
-    TRACE("trec: %p %s", trec, "Commit")
+    TRACE("trec: %p %s", trec, "Commit");
     return otm_begin_finalization(trec, OTREC_COMMIT);
 }
 
 OTState otmRetry(OTRecHeader* trec) {
-    TRACE("trec: %p %s", trec, "Retry")
+    TRACE("trec: %p %s", trec, "Retry");
     return otm_begin_finalization(trec, OTREC_RETRY);
 }
 

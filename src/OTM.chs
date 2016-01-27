@@ -110,7 +110,7 @@ checkState = do
         toEnum . fromIntegral <$> withOTRec otrec {#get OTRecHeader->state.state #}
     case state of
         OtrecRetry -> retry
-        OtrecAbort -> liftIO . propagateException $ otrec
+        OtrecAbort -> retry
         _ -> return ()
 
 
