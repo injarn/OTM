@@ -573,7 +573,7 @@ HsBool isValid(OTRecHeader* trec, OTState* state) {
     returns FALSE if the memory was already initialized
 */
 HsBool otm_acquire_OTVar_read(OTRecHeader* trec, OTVar* otvar) {
-    if (hs_atomicread64((StgWord64*)&(otvar -> delta)) == (StgWord64)NULL) {
+    if (otvar -> delta == NULL) {
         OTVarDelta *d = get_new_delta(); // se si tiene un pool di working memory non è male
         d -> new_value = acquire_otm_stable_ptr(otvar -> current_value);
         d -> trec = trec;
@@ -591,7 +591,7 @@ HsBool otm_acquire_OTVar_read(OTRecHeader* trec, OTVar* otvar) {
 }
 
 HsBool otm_acquire_OTVar_write(OTRecHeader* trec, OTVar* otvar, HsStablePtr new_value){
-    if (hs_atomicread64((StgWord64*)&(otvar -> delta)) == (StgWord64)NULL) {
+    if (otvar -> delta == NULL) {
         OTVarDelta *d = get_new_delta();
         d -> new_value = new_otm_stableptr(new_value);
         d -> trec = trec;
@@ -611,10 +611,7 @@ HsBool otm_acquire_OTVar_write(OTRecHeader* trec, OTVar* otvar, HsStablePtr new_
 HsStablePtr otmReadOTVar(OTRecHeader* trec, OTVar* otvar) {
     TRACE("trec: %p read  %p", trec, otvar);
     assert(trec -> forward_trec != NULL);
-    // OTState *state;
-    // if (!isValid(trec, state)) {
-    //     return NULL;
-    // }
+
     if(!otm_acquire_OTVar_read(trec, otvar)) {
         if(!otmUnion(trec, otvar -> delta -> trec)){
             // Retry the read
@@ -622,7 +619,7 @@ HsStablePtr otmReadOTVar(OTRecHeader* trec, OTVar* otvar) {
             return otmReadOTVar(trec, otvar);
         }
     }
-    return (HsStablePtr)hs_atomicread64((StgWord64*)&(otvar -> delta -> new_value -> ptr));
+    return otvar -> delta -> new_value -> ptr;
 }
 
 /*  Da rivedere perchè non sembra funzionare molto bene,
@@ -788,7 +785,7 @@ void otm_free_working_memory(OTRecHeader* trec) {
 }
 
 
-void otm_end_transaction(OTRecHeader* trec) {
+void otm_end_finalization(OTRecHeader* trec) {
     OTRecHeader* root = find(trec);
     OTState final_state, s;
 
@@ -817,100 +814,69 @@ void otm_end_transaction(OTRecHeader* trec) {
     }
 }
 
+OTState otm_begin_finalization(OTRecHeader* trec, OTState new_state){
+    assert(trec -> forward_trec != NULL);
+    OTState s;
+    HsBool valid;
+    OTRecHeader* root;
+    do {
+        root = find(trec);
+        s = lock_OTRec(root);
+        assert(!(s & (OTREC_ABORTED | OTREC_COMMITED | OTREC_RETRYED)));
+        valid = root -> forward_trec -> next == root;
+        if (!valid) {
+            unlock_OTRec(root, s);
+        }
+    } while (!valid);
+
+    if (s == OTREC_RUNNING) {
+        root -> state.running--;
+        if (new_state != OTREC_COMMIT || root -> state.running == 0) {
+            s = new_state;
+            root -> state.running = root -> state.threads;
+            // The following assignment is executed excactly once per transaction
+            // therefore when an exception is assigned it cannot be overwritte
+            // root -> state.exception = exception;
+            unlock_OTRec(root, s);
+        } else { // new_state == OTREC_COMMIT && running > 0
+            unlock_OTRec(root, s);
+            while(find(trec) -> state.state & (OTREC_RUNNING | OTREC_LOCKED)) {
+                busy_wait_nop();
+                // yieldThread();
+            }
+        }
+    } else {
+        // if (exception != NULL) {
+        //     hs_free_stable_ptr((HsStablePtr)exception);
+        // } 
+        unlock_OTRec(root, s);
+    }
+
+
+    otm_end_finalization(trec);
+    s = find(trec) -> state.state;
+    assert(s & (OTREC_ABORTED | OTREC_COMMITED | OTREC_RETRYED));
+    
+    if((s & OTREC_ABORTED) && trec -> state.exception == NULL) {
+        return OTREC_RETRYED;
+    }
+
+    return find(trec) -> state.state;
+}
 // TODO: Commit without locks
 // Return values: OTREC_COMMITED, OTREC_RETRY, OTREC_ABORTED
 OTState otmCommit(OTRecHeader* trec) {
     TRACE("trec: %p %s", trec, "Commit")
-    assert(trec -> forward_trec != NULL);
-    OTState s;
-    HsBool valid;
-    OTRecHeader* root;
-    do {
-        root = find(trec);
-        s = lock_OTRec(root);
-        assert(!(s & (OTREC_ABORTED | OTREC_COMMITED | OTREC_RETRYED)));
-        valid = root -> forward_trec -> next == root;
-        if (!valid) {
-            unlock_OTRec(root, s);
-        }
-    } while (!valid);
-
-    root -> state.running--;
-
-    if (root -> state.running == 0) {
-        if (s < OTREC_COMMIT) {
-            s = OTREC_COMMIT;
-        }
-        root -> state.running = root -> state.threads;
-        unlock_OTRec(root, s);
-    } else {
-        unlock_OTRec(root, s);
-        while(find(trec) -> state.state & (OTREC_RUNNING | OTREC_LOCKED)) {
-            busy_wait_nop();
-            // yieldThread();
-        }
-    }
-
-    otm_end_transaction(trec);
-    return find(trec) -> state.state;
+    return otm_begin_finalization(trec, OTREC_COMMIT);
 }
 
 OTState otmRetry(OTRecHeader* trec) {
     TRACE("trec: %p %s", trec, "Retry")
-    assert(trec -> forward_trec != NULL);
-    OTState s;
-    HsBool valid;
-    OTRecHeader* root;
-    do {
-        root = find(trec);
-        s = lock_OTRec(root);
-        assert(!(s & (OTREC_ABORTED | OTREC_COMMITED | OTREC_RETRYED)));
-        valid = root -> forward_trec -> next == root;
-        if (!valid) {
-            unlock_OTRec(root, s);
-        }
-    } while (!valid);
-
-    
-
-    if (s < OTREC_RETRY) {
-        s = OTREC_RETRY;
-        root -> state.running = root -> state.threads;
-    }
-    unlock_OTRec(root, s);
-        
-    otm_end_transaction(trec);
-    return find(trec) -> state.state;
+    return otm_begin_finalization(trec, OTREC_RETRY);
 }
 
 OTState otmAbort(OTRecHeader* trec, HsStablePtr some_exception) {
     TRACE("trec: %p %s", trec, "Abort");
-    assert(trec -> forward_trec != NULL);
-    OTState s;
-    HsBool valid;
-    OTRecHeader* root;
-    do {
-        root = find(trec);
-        s = lock_OTRec(root);
-        assert(!(s & (OTREC_ABORTED | OTREC_COMMITED | OTREC_RETRYED)));
-        valid = root -> forward_trec -> next == root;
-        if (!valid) {
-            unlock_OTRec(root, s);
-        }
-    } while (!valid);
-
-    
-
-    if (s < OTREC_ABORT) {
-        assert(root -> state.exception == NULL);
-        s = OTREC_ABORT;
-        root -> state.exception = some_exception;
-        root -> state.running = root -> state.threads;
-    } else {
-        hs_free_stable_ptr(some_exception);
-    }
-    unlock_OTRec(root, s);
-
-    otm_end_transaction(trec);
-    return find(trec) -> state.state;
+    trec -> state.exception = some_exception;
+    return otm_begin_finalization(trec, OTREC_ABORT);
 }

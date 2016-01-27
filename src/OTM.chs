@@ -173,10 +173,11 @@ writeOTVar var value = do
 retry:: OTM ()
 retry = throwError RetryException
 
-abort:: OTM ()
-abort = liftIO $ do
-    evaluate (5 `div` 0) :: IO Int
-    return ()
+--abort:: OTM ()
+abort :: (Monad m, Integral n) => m n
+abort = do
+    --evaluate (5 `div` 0) :: IO Int
+    return $! 5 `div` 0 
 
 otmHandleTransaction:: OTRec -> OTM a -> OTState -> IO a
 otmHandleTransaction otrec otm state = do
@@ -184,7 +185,7 @@ otmHandleTransaction otrec otm state = do
         OtrecRetryed  -> atomic otm
         OtrecAborted  -> do
             root <- find otrec
-            ptr <- withOTRec root {#get OTRecHeader->state.exception #} 
+            ptr <- withOTRec otrec {#get OTRecHeader->state.exception #} 
             exp::SomeException <- deRefStablePtr . castPtrToStablePtr $ ptr
             throw exp
         _ -> error "Invalid state" 
