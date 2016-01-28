@@ -660,86 +660,6 @@ void otmWriteOTVar(OTRecHeader *trec, OTVar *otvar, HsStablePtr new_value) {
     }
 }
 
-
-HsStablePtr itmReadOTVar(OTRecHeader* trec, OTVar* otvar) {
-    OtmStablePtr result = NULL;
-    OTRecHeader *entry_in = NULL;
-    OTRecEntry *entry = NULL;
-    assert(trec -> forward_trec == NULL); // trec is isolated
-    entry = get_entry_for(trec, otvar, &entry_in);
-    assert(entry != NULL);
-    if(entry != NULL) {
-        if (entry_in == trec) {
-            // Entry found in our trec
-            result = entry -> new_value;
-        } else {
-            // Entry found in another trec
-            OTRecEntry *new_entry = get_new_entry(trec);
-            if (entry_in -> forward_trec == NULL) {
-                // Entry found in an Isolated Transaction
-                new_entry -> otvar = otvar;
-                new_entry -> expected_value = acquire_otm_stable_ptr(entry -> expected_value);
-                new_entry -> new_value = acquire_otm_stable_ptr(entry -> new_value);
-                result = new_entry -> new_value;
-            } else {
-                // Entry found in an Open Tranaction -> Read From Delta Memory
-                OtmStablePtr current_value = read_delta_value(otvar);
-                new_entry -> otvar = otvar;
-                new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
-                new_entry -> new_value = acquire_otm_stable_ptr(current_value);
-                result = new_entry -> new_value;
-            }
-        }
-    } else {
-        OtmStablePtr current_value = read_current_value(otvar);
-        OTRecEntry *new_entry = get_new_entry(trec);
-        new_entry -> otvar = otvar;
-        new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
-        new_entry -> new_value = acquire_otm_stable_ptr(current_value);
-        result = current_value;
-    }
-
-    return result -> ptr;
-}
-
-void itmWriteOTVar(OTRecHeader* trec, OTVar* otvar, HsStablePtr new_value) {
-    OTRecHeader *entry_in = NULL;
-    OTRecEntry *entry = NULL;
-    OtmStablePtr n_value;
-    assert(trec -> forward_trec == NULL); // trec is isolated
-    entry = get_entry_for(trec, otvar, &entry_in);
-    if(entry != NULL) {
-        if (entry_in == trec) {
-            // Entry found in our trec
-            release_otm_stable_ptr(entry -> new_value);
-            entry -> new_value = new_otm_stableptr(new_value);
-        } else {
-            // Entry found in another trec
-            OTRecEntry *new_entry = get_new_entry(trec);
-            if (trec -> forward_trec == NULL) {
-                // Entry found in an Isolated Transaction (enclosing)
-                new_entry -> otvar = otvar;
-                new_entry -> expected_value = acquire_otm_stable_ptr(entry -> expected_value);
-                new_entry -> new_value = new_otm_stableptr(new_value);
-
-            } else {
-                // Entry found in an Open Tranaction -> Read From Delta Memory
-                OtmStablePtr current_value = read_delta_value(otvar);
-                new_entry -> otvar = otvar;
-                new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
-                new_entry -> new_value = new_otm_stableptr(new_value);
-            }
-        }
-    } else {
-        // No entry found
-        OtmStablePtr current_value = read_current_value(otvar);
-        OTRecEntry *new_entry = get_new_entry(trec);
-        new_entry -> otvar = otvar;
-        new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
-        new_entry -> new_value = new_otm_stableptr(new_value);
-    }
-}
-
 // TODO: How about num_updates of delta and OTVar?
 void otm_commit_working_memory(OTRecHeader* trec) {
     OTVar *otvar;
@@ -865,3 +785,86 @@ OTState otmAbort(OTRecHeader* trec, HsStablePtr some_exception) {
     trec -> state.exception = some_exception;
     return otm_begin_finalization(trec, OTREC_ABORT);
 }
+
+/*-------- ITM --------*/
+
+HsStablePtr itmReadOTVar(OTRecHeader* trec, OTVar* otvar) {
+    OtmStablePtr result = NULL;
+    OTRecHeader *entry_in = NULL;
+    OTRecEntry *entry = NULL;
+    assert(trec -> forward_trec == NULL); // trec is isolated
+    entry = get_entry_for(trec, otvar, &entry_in);
+    assert(entry != NULL);
+    if(entry != NULL) {
+        if (entry_in == trec) {
+            // Entry found in our trec
+            result = entry -> new_value;
+        } else {
+            // Entry found in another trec
+            OTRecEntry *new_entry = get_new_entry(trec);
+            if (entry_in -> forward_trec == NULL) {
+                // Entry found in an Isolated Transaction
+                new_entry -> otvar = otvar;
+                new_entry -> expected_value = acquire_otm_stable_ptr(entry -> expected_value);
+                new_entry -> new_value = acquire_otm_stable_ptr(entry -> new_value);
+                result = new_entry -> new_value;
+            } else {
+                // Entry found in an Open Tranaction -> Read From Delta Memory
+                OtmStablePtr current_value = read_delta_value(otvar);
+                new_entry -> otvar = otvar;
+                new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
+                new_entry -> new_value = acquire_otm_stable_ptr(current_value);
+                result = new_entry -> new_value;
+            }
+        }
+    } else {
+        OtmStablePtr current_value = read_current_value(otvar);
+        OTRecEntry *new_entry = get_new_entry(trec);
+        new_entry -> otvar = otvar;
+        new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
+        new_entry -> new_value = acquire_otm_stable_ptr(current_value);
+        result = current_value;
+    }
+
+    return result -> ptr;
+}
+
+void itmWriteOTVar(OTRecHeader* trec, OTVar* otvar, HsStablePtr new_value) {
+    OTRecHeader *entry_in = NULL;
+    OTRecEntry *entry = NULL;
+    OtmStablePtr n_value;
+    assert(trec -> forward_trec == NULL); // trec is isolated
+    entry = get_entry_for(trec, otvar, &entry_in);
+    if(entry != NULL) {
+        if (entry_in == trec) {
+            // Entry found in our trec
+            release_otm_stable_ptr(entry -> new_value);
+            entry -> new_value = new_otm_stableptr(new_value);
+        } else {
+            // Entry found in another trec
+            OTRecEntry *new_entry = get_new_entry(trec);
+            if (trec -> forward_trec == NULL) {
+                // Entry found in an Isolated Transaction (enclosing)
+                new_entry -> otvar = otvar;
+                new_entry -> expected_value = acquire_otm_stable_ptr(entry -> expected_value);
+                new_entry -> new_value = new_otm_stableptr(new_value);
+
+            } else {
+                // Entry found in an Open Tranaction -> Read From Delta Memory
+                OtmStablePtr current_value = read_delta_value(otvar);
+                new_entry -> otvar = otvar;
+                new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
+                new_entry -> new_value = new_otm_stableptr(new_value);
+            }
+        }
+    } else {
+        // No entry found
+        OtmStablePtr current_value = read_current_value(otvar);
+        OTRecEntry *new_entry = get_new_entry(trec);
+        new_entry -> otvar = otvar;
+        new_entry -> expected_value = acquire_otm_stable_ptr(current_value);
+        new_entry -> new_value = new_otm_stableptr(new_value);
+    }
+}
+
+

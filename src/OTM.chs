@@ -209,3 +209,28 @@ atomic otm = do
                 case state of
                     OtrecCommited -> return v
                     _ -> otmHandleTransaction otrec otm state
+
+{---------- ITM ----------}
+
+type ITM a = OTMT IO a
+
+runITM :: ITM a -> OTRec -> IO (Either RetryException a)
+runITM = runOTMT
+
+isolated :: forall a . ITM a -> OTM ()
+isolated itm = do
+    sp <- liftIO $ do 
+        tid <- myThreadId
+        newStablePtr tid
+    outer <- get   
+    result <- liftIO $ do
+        itrec <- otmStartTransaction sp outer
+        try $ runITM itm itrec :: IO (Either SomeException (Either RetryException a))
+    case result of
+        Left se -> liftIO $ do
+            putStrLn "Abort isolated"
+        Right computation -> case computation of
+            Left _ -> liftIO $ do
+                putStrLn "Retry isolated"
+            Right v -> liftIO $ do
+                putStrLn "Commit isolated"

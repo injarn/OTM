@@ -11,7 +11,7 @@ main = do
         writeOTVar otvar 10
         v <- readOTVar otvar
         liftIO $ putStrLn . show $ v
-        return v
+        isolated $ return v
     putStrLn "End!"
     atomic $ do
         abort
