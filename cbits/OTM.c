@@ -680,6 +680,7 @@ void otmWriteOTVar(OTRecHeader *trec, OTVar *otvar, HsStablePtr new_value) {
                 busy_wait_nop();
             }
             OtmStablePtr n_value = new_otm_stableptr(new_value);
+            // atomic_inc((StgVolatilePtr)&otvar -> delta -> num_updates, 1);
             OtmStablePtr old =(OtmStablePtr)xchg((StgPtr)(void*)&(otvar -> delta -> new_value),(StgWord)n_value);
             release_otm_stable_ptr(old);
         }
@@ -691,7 +692,6 @@ void otm_commit_working_memory(OTRecHeader* trec) {
     OTVar *otvar;
     OTVarDelta* old;
     FOR_EACH_ENTRY(trec, e, {
-        TRACE("ENTRY FOR_EACH_ENTRY LOOP");
         otvar = e -> otvar;
         // The otvar is locked until otvar -> delta becames NULL
         // So other transactions will not read from current_value
@@ -700,7 +700,6 @@ void otm_commit_working_memory(OTRecHeader* trec) {
         old = (OTVarDelta*)xchg((StgPtr)&otvar -> delta, (StgWord)NULL);
         release_otm_stable_ptr(old -> new_value);
         free(old);
-        TRACE("END FOR_EACH_ENTRY LOOP");
     });
 }
 

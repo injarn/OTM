@@ -142,9 +142,10 @@ getThreadId otrec = do
 {#fun unsafe otmStartTransaction {castStablePtrToPtr `StablePtr ThreadId', `OTRec'} -> `OTRec' #}
 
 {#fun unsafe otmReadOTVar {`OTRec', withOTVar* `OTVar a'} -> `StablePtr a' castPtrToStablePtr#}
--- TODO: remember to free the returned stableptr
+
 {#fun unsafe otmWriteOTVar {`OTRec', withOTVar* `OTVar a' , castStablePtrToPtr `StablePtr a' } -> `()' #}
 
+-- This calls must be Safe because are blocking functions
 {#fun otmCommit {`OTRec'} -> `OTState' #}
 {#fun otmRetry  {`OTRec'} -> `OTState' #}
 {#fun otmAbort  {`OTRec', castStablePtrToPtr `StablePtr SomeException'} -> `OTState' #}
@@ -217,20 +218,41 @@ type ITM a = OTMT IO a
 runITM :: ITM a -> OTRec -> IO (Either RetryException a)
 runITM = runOTMT
 
-isolated :: forall a . ITM a -> OTM ()
+{#fun unsafe itmCommitTransaction {`OTRec'} -> `Bool' #}
+
+{#fun unsafe itmReadOTVar {`OTRec', withOTVar* `OTVar a'} -> `StablePtr a' castPtrToStablePtr#}
+
+{#fun unsafe itmWriteOTVar {`OTRec', withOTVar* `OTVar a' , castStablePtrToPtr `StablePtr a' } -> `()' #}
+
+
+readITVar:: OTVar a -> ITM a
+readITVar var = do
+    otrec <- get
+    v <- liftIO $ do itmReadOTVar otrec var >>= deRefStablePtr
+    return v
+
+writeITVar:: OTVar a -> a -> ITM ()
+writeITVar var value = do
+        otrec <- get
+        s1 <- liftIO $ newStablePtr value
+        liftIO $ itmWriteOTVar otrec var s1
+
+isolated :: forall a . ITM a -> OTM a
 isolated itm = do
     sp <- liftIO $ do 
         tid <- myThreadId
         newStablePtr tid
-    outer <- get   
+    outer <- get
+    itrec <- liftIO $ otmStartTransaction sp outer
     result <- liftIO $ do
-        itrec <- otmStartTransaction sp outer
         try $ runITM itm itrec :: IO (Either SomeException (Either RetryException a))
     case result of
         Left se -> liftIO $ do
-            putStrLn "Abort isolated"
+            throw se
         Right computation -> case computation of
-            Left _ -> liftIO $ do
-                putStrLn "Retry isolated"
-            Right v -> liftIO $ do
-                putStrLn "Commit isolated"
+            Left err -> throwError err
+            Right v -> do
+                valid <- liftIO $ itmCommitTransaction itrec
+                case valid of
+                    True -> return v
+                    _ -> throwError RetryException

@@ -189,3 +189,7 @@ OTState otmCommit(OTRecHeader* trec);
 OTState otmRetry(OTRecHeader* trec);
 OTState otmAbort(OTRecHeader* trec, HsStablePtr some_exception);
 
+HsStablePtr itmReadOTVar(OTRecHeader* trec, OTVar* otvar);
+void itmWriteOTVar(OTRecHeader* trec, OTVar* otvar, HsStablePtr new_value);
+HsBool itmCommitTransaction(OTRecHeader* trec);
+
