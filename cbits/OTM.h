@@ -53,10 +53,10 @@ typedef struct {
 } OTVarDelta;
 
 typedef struct {
-    OtmStablePtr         volatile current_value;
+    OtmStablePtr        volatile current_value;
     OTVarWatchQueue    *volatile first_watch_queue_entry;
     HsWord              volatile num_updates;
-    HsBool              volatile locked;
+    HsWord              volatile locked;
     OTVarDelta         *volatile delta;
     // OTRecHeader        *volatile trec;   // The transaction that made the last operation, probably not needed
     // OTRecEntry         *volatile entry;  // Working memory

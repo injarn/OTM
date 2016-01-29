@@ -159,18 +159,38 @@ void unlock_OTRec(OTRecHeader *trec, OTState s){
     trec -> state.state = s;
 }
 
-
-HsStablePtr lock_otvar(OTVar* otvar) {
-    StgWord state;
-    do {    // SpinLock
-        state = xchg((StgPtr)(void*)&otvar -> locked, (StgWord)1);
-        if (state != (StgWord)1) return otvar -> current_value;
-    } while(1);
+HsBool trec_is_open(OTRecHeader* volatile trec) {
+    return trec -> forward_trec != NULL;
 }
 
-void unlock_otvar(OTVar* otvar){
+HsBool trec_is_isolated(OTRecHeader* volatile trec) {
+    return !trec_is_open(trec);
+}
+
+HsBool trec_is_isolated_not_nested(OTRecHeader* volatile trec) {
+    assert(trec_is_isolated(trec));
+    return trec_is_open(trec -> enclosing_trec);
+}
+
+void lock_otvar(OTRecHeader* trec, OTVar* otvar) {
+    StgWord state;
+    while (cas((StgVolatilePtr)&(otvar -> locked), 0, (StgWord)trec) != 0) {
+        busy_wait_nop();
+    }
+}
+
+HsBool cond_lock_tvar(OTRecHeader* trec, OTVar* otvar) {
+    return (cas((StgVolatilePtr)&(otvar -> locked), 0, (StgWord)trec) == 0);
+}
+
+void unlock_otvar(OTRecHeader* trec, OTVar* otvar){
+    assert(otvar -> locked == (StgWord)trec);
     write_barrier();
     otvar -> locked = 0;
+}
+
+HsBool otvar_is_locked_by (OTVar* otvar, OTRecHeader* trec) {
+    return (otvar -> locked == (StgWord)trec);
 }
 
 OtmStablePtr read_current_value(OTVar* otvar) {
@@ -500,6 +520,12 @@ OTRecEntry* get_new_entry(OTRecHeader* trec) {
     }
 
     return result;
+}
+
+HsBool entry_is_update(OTRecEntry *e) {
+  HsBool result;
+  result = (e -> expected_value != e -> new_value);
+  return result;
 }
 
 OTRecChunk* get_new_otrec_chunck(){
@@ -867,4 +893,105 @@ void itmWriteOTVar(OTRecHeader* trec, OTVar* otvar, HsStablePtr new_value) {
     }
 }
 
+void revert_ownership(OTRecHeader *trec STG_UNUSED, HsBool revert_all) {
+  FOR_EACH_ENTRY(trec, e, {
+    if (revert_all || entry_is_update(e)) {
+      OTVar *s;
+      s = e -> otvar;
+      if (otvar_is_locked_by(s, trec)) {
+          unlock_otvar(trec, s);
+      }
+    }
+  });
+}
 
+/* TODO: lock only the write set as the STM does for transactions that haven't 
+         invariants to check before committing. The STM validates the read set 
+         check both the expected_value and the num_updates */
+HsBool validate_and_acquire_ownership(OTRecHeader *trec,
+                                      int acquire_all,
+                                      int retain_ownership) {
+    HsBool result;
+    assert(trec -> forward_trec == NULL);
+
+    result = trec -> state.state == OTREC_RUNNING;
+    if (result) {
+        FOR_EACH_ENTRY(trec, e, {
+            OTVar *s;
+            s = e -> otvar;
+            if (acquire_all || entry_is_update(e)) {
+                TRACE("%p : trying to acquire %p", trec, s);
+                if (!cond_lock_tvar(trec, s)) {
+                    TRACE("%p : failed to acquire %p", trec, s);
+                    result = 0;
+                    BREAK_FOR_EACH(e);
+                }
+            } else {
+                assert(0);
+            }
+        });
+    } else {
+        revert_ownership(trec, 1);
+    }
+
+    if ((!result) || (!retain_ownership)){
+        revert_ownership(trec, acquire_all);
+    }
+    return result;
+}
+
+void unpark_waiters_on(OTVar *s) {
+
+}
+
+HsBool itm_acquire_OTVar_write(OTRecHeader* trec, OTVar* otvar, OtmStablePtr new_value){
+    if (otvar -> delta == NULL) {
+        OTVarDelta *d = get_new_delta();
+        d -> new_value = acquire_otm_stable_ptr(new_value);
+        d -> trec = trec;
+        if(cas((StgVolatilePtr)&otvar->delta, (StgWord)NULL, (StgWord)d) == (StgWord)NULL) {
+            OTRecEntry * ne = get_new_entry(trec);
+            ne -> otvar = otvar;
+            return 1;
+        } else {
+            release_otm_stable_ptr(d -> new_value);
+            free(d);
+        }
+    }
+    return 0;
+}
+
+void itm_write_delta_memory(OTRecHeader *trec, OTVar *otvar, OtmStablePtr new_value) {
+    assert(trec_is_open(trec));
+    if(!itm_acquire_OTVar_write(trec, otvar, new_value)) {
+        // if the OTVar is already acquired by someone else
+        if(!otmUnion(trec, otvar -> delta -> trec)) {
+            return itm_write_delta_memory(trec, otvar, new_value);
+        } else {
+            // the Union was successfull or i was already joined
+            new_value = acquire_otm_stable_ptr(new_value);
+            OtmStablePtr old =(OtmStablePtr)xchg((StgPtr)(void*)&(otvar -> delta -> new_value),(StgWord)new_value);
+            release_otm_stable_ptr(old);
+        }
+    }
+}
+
+HsBool itmCommitTransaction(OTRecHeader* trec) {
+    HsBool result;
+    assert(trec_is_isolated_not_nested(trec));
+    assert(trec -> state.state & OTREC_RUNNING);
+
+    result = validate_and_acquire_ownership(trec, 1, 1);
+    if (result) {
+        FOR_EACH_ENTRY(trec, e, {
+            OTVar *s;
+            s = e -> otvar;
+            unpark_waiters_on(s);
+            itm_write_delta_memory(trec -> enclosing_trec, s, e -> new_value);
+            unlock_otvar(trec, s);
+        });
+    } else {
+        revert_ownership(trec, 1);
+    }
+    return result;
+}
