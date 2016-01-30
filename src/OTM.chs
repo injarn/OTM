@@ -171,7 +171,7 @@ writeOTVar var value = do
         s1 <- liftIO $ newStablePtr value
         liftIO $ otmWriteOTVar otrec var s1
 
-retry:: OTM ()
+retry:: (Monad m) => OTMT m a
 retry = throwError RetryException
 
 --abort:: OTM ()
@@ -250,9 +250,9 @@ isolated itm = do
         Left se -> liftIO $ do
             throw se
         Right computation -> case computation of
-            Left err -> throwError err
+            Left err -> retry
             Right v -> do
                 valid <- liftIO $ itmCommitTransaction itrec
                 case valid of
                     True -> return v
-                    _ -> throwError RetryException
+                    _ -> retry
