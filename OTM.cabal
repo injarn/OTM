@@ -27,7 +27,7 @@ library
   C-sources:           cbits/OTM.c
   Include-dirs:        cbits
   Includes:            OTM.h, Rts.h, RtsAPI.h, stdlib.h
-  extra-libraries:     HSrts_thr_debug-ghc7.10.3
+  extra-libraries:     HSrts_thr_debug
   -- HSrts_thr-ghc7.10.3 
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   CC-Options:          "-DTHREADED_RTS -DNDEBUG"
