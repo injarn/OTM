@@ -819,7 +819,6 @@ HsStablePtr itmReadOTVar(OTRecHeader* trec, OTVar* otvar) {
     OTRecEntry *entry = NULL;
     assert(trec -> forward_trec == NULL); // trec is isolated
     entry = get_entry_for(trec, otvar, &entry_in);
-    assert(entry != NULL);
     if(entry != NULL) {
         if (entry_in == trec) {
             // Entry found in our trec
