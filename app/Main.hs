@@ -1,7 +1,8 @@
 module Main where
 
 import Lib
-import OTM
+import OTMs
+-- import OTM
 import Foreign.StablePtr
 import Control.Monad.State -- liftIO
 main :: IO ()

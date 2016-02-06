@@ -5,7 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 #include "OTM.h"
-module OTM {- (
+module OTMs {- (
     OTVar,
     newOTVar,
     otmStartTransaction) -}where
@@ -26,6 +26,9 @@ import Foreign.ForeignPtr
 import Foreign.Storable
 import Foreign.C.Types
 
+-- Control.Monad.OTM definizione di monadi
+-- Control.Monad.OTM.Internals
+-- Control.Concurrent.OTM importa tutti i moduli di Control.Concurrent(semafori,..)
 
 foreign import ccall "compareStablePtr" compareStablePtr :: StablePtr a -> StablePtr a -> Bool
 
@@ -120,6 +123,21 @@ data RetryException = RetryException
     deriving (Show, Typeable)
 
 instance Exception RetryException
+
+
+--type TM = StateT OTRec (ExceptT RetryException IO)
+
+--newtype OTM a = OTM { unOTM :: TM a }
+--    deriving Monad
+
+--newtype ITM a = ITM { unITM :: TM a }
+--    deriving Monad
+
+--readOTVar' :: OTVar a -> TM a
+
+--readOTVar :: OTVar a -> OTM a
+--readOTVar = OTM . readOTVar'
+
 
 newtype OTMT m a = OTMT { unOTMT :: StateT OTRec (ExceptT RetryException m) a }
     deriving(Monad, MonadState OTRec, MonadError RetryException, Functor, Applicative, MonadIO)

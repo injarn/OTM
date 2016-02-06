@@ -15,7 +15,10 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     OTM, Lib
+                     , src/Control/Monad
+                     , src/Control/Monad/OTM
+  exposed-modules:     OTMs, Lib, OTM
+  other-modules:       Internals
   build-depends:       base >= 4.7 && < 5
                      , mtl >= 2.2.1
   other-extensions:    ForeignFunctionInterface,
@@ -46,7 +49,7 @@ test-suite OTM-test
   hs-source-dirs:      test
   main-is:             Spec.hs
   build-depends:       base
-                     , OTM
+                     -- , OTMs
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 
