@@ -17,8 +17,8 @@ library
   hs-source-dirs:      src
                      , src/Control/Monad
                      , src/Control/Monad/OTM
-  exposed-modules:     OTMs, Lib, OTM
-  other-modules:       Internals
+  exposed-modules:     OTMs, Lib, Control.Monad.OTM
+  other-modules:       Control.Monad.OTM.Internals
   build-depends:       base >= 4.7 && < 5
                      , mtl >= 2.2.1
   other-extensions:    ForeignFunctionInterface,

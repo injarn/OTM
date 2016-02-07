@@ -195,7 +195,6 @@ retry = throwError RetryException
 --abort:: OTM ()
 abort :: (Monad m, Integral n) => m n
 abort = do
-    --evaluate (5 `div` 0) :: IO Int
     return $! 5 `div` 0 
 
 otmHandleTransaction:: OTRec -> OTM a -> OTState -> IO a
@@ -255,13 +254,17 @@ writeITVar var value = do
         s1 <- liftIO $ newStablePtr value
         liftIO $ itmWriteOTVar otrec var s1
 
+
+startIsolatedTransaction :: OTRec -> IO (OTRec)
+startIsolatedTransaction outer = do
+    tid <- myThreadId
+    sp <- newStablePtr tid -- Not sure if it is good idea(thread will not be GC)
+    otmStartTransaction sp outer
+
 isolated :: forall a . ITM a -> OTM a
 isolated itm = do
-    sp <- liftIO $ do 
-        tid <- myThreadId
-        newStablePtr tid
     outer <- get
-    itrec <- liftIO $ otmStartTransaction sp outer
+    itrec <- liftIO $ startIsolatedTransaction outer
     result <- liftIO $ do
         try $ runITM itm itrec :: IO (Either SomeException (Either RetryException a))
     case result of
@@ -274,3 +277,4 @@ isolated itm = do
                 case valid of
                     True -> return v
                     _ -> retry
+

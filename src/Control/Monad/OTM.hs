@@ -3,18 +3,26 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 
-module OTM (
+module Control.Monad.OTM (
     OTM,
     ITM,
     atomic,
-    isolated) where
+    isolated,
+    retry,
+    abort,
+    unsafeIOToOTM,
+    unsafeIOToITM,
+    newOTVarIO,
+    newOTVar,
+    readOTVar,
+    writeOTVar) where
 
 import Data.Typeable
 import Control.Monad.State  -- StateT
 import Control.Monad.Except -- ExceptT
 import Control.Exception
 import Foreign.StablePtr
-import Internals
+import Control.Monad.OTM.Internals
 
 
 data RetryException = RetryException
@@ -22,13 +30,20 @@ data RetryException = RetryException
 
 instance Exception RetryException
 
+class TransactionalMemory a where
+
+
 class (Monad m) => MonadTransaction m where
     retry :: m a
+    -- oreElse :: m a -> m a -> m a
 
-    --newOTVar :: a -> m (OTVar a)
-    --readOTVar :: OTVar a -> m a
-    --writeOTVar :: OTVar a -> a -> m ()
+-- Monad Transactional Memory
+class (Monad m) => MonadTM m where
+    newOTVar :: a -> m (OTVar a)
+    readOTVar :: OTVar a -> m a
+    writeOTVar :: OTVar a -> a -> m ()
 
+    
 
 type TM = StateT OTRec (ExceptT RetryException IO)
 
@@ -45,6 +60,20 @@ evalOTM otm s = runExceptT . flip evalStateT s $ unOTM otm
 instance MonadTransaction OTM where
     retry = OTM $ throwError RetryException
 
+instance MonadTM OTM where
+    newOTVar = OTM . liftIO . newOTVarIO
+    readOTVar otvar = do 
+        checkState
+        OTM $ do
+            otrec <- get
+            liftIO $ readOTVar' otrec otvar
+    writeOTVar otvar value = do
+        checkState
+        OTM $ do
+            otrec <- get
+            liftIO $ writeOTVar' otrec otvar value
+
+
 
 {-  ITM  -}
 newtype ITM a = ITM { unITM :: TM a }
@@ -55,6 +84,15 @@ evalITM itm s = runExceptT . flip evalStateT s $ unITM itm
 
 instance MonadTransaction ITM where
     retry = ITM $ throwError RetryException
+
+instance MonadTM ITM where
+    newOTVar = ITM . liftIO . newOTVarIO
+    readOTVar otvar = ITM $ do
+        otrec <- get
+        liftIO $ readITVar' otrec otvar
+    writeOTVar otvar value = ITM $ do
+        otrec <- get
+        liftIO $ writeITVar' otrec otvar value
 
 otmHandleTransaction:: OTRec -> OTM a -> OTState -> IO a
 otmHandleTransaction otrec otm state = do
@@ -119,3 +157,27 @@ isolated' itm = do
                 case valid of
                     True -> return v
                     _ -> retry
+
+checkState:: OTM ()
+checkState = OTM $ do
+    otrec <- get
+    state <- liftIO $ do 
+        otrec <- find otrec
+        getState otrec
+    case state of
+        OtrecRetry -> retry
+        OtrecAbort -> retry
+        _ -> return ()
+
+
+unsafeIOToOTM :: IO a -> OTM a
+unsafeIOToOTM = OTM . liftIO
+
+unsafeIOToITM :: IO a -> ITM a
+unsafeIOToITM = ITM . liftIO
+
+abort :: (Monad m, Integral n) => m n
+abort = do
+    return $! 5 `div` 0 
+
+

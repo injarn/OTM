@@ -1,8 +1,8 @@
 module Main where
 
 import Lib
-import OTMs
--- import OTM
+-- import OTMs
+import Control.Monad.OTM
 import Foreign.StablePtr
 import Control.Monad.State -- liftIO
 main :: IO ()
@@ -11,7 +11,7 @@ main = do
         otvar <- newOTVar (5::Integer)
         writeOTVar otvar 10
         v <- readOTVar otvar
-        liftIO $ putStrLn . show $ v
+        unsafeIOToOTM $ putStrLn . show $ v
         isolated $ return v
     putStrLn "End!"
     atomic $ do
