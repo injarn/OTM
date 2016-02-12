@@ -680,7 +680,7 @@ void otmWriteOTVar(OTRecHeader *trec, OTVar *otvar, HsStablePtr new_value) {
                 busy_wait_nop();
             }
             OtmStablePtr n_value = new_otm_stableptr(new_value);
-            // atomic_inc((StgVolatilePtr)&otvar -> delta -> num_updates, 1);
+            atomic_inc((StgVolatilePtr)&otvar -> delta -> num_updates, 1);
             OtmStablePtr old =(OtmStablePtr)xchg((StgPtr)(void*)&(otvar -> delta -> new_value),(StgWord)n_value);
             release_otm_stable_ptr(old);
         }
