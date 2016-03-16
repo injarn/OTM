@@ -28,7 +28,7 @@ newOTSem i = fmap OTSem (newOTVar i)
 
 waitOTSem :: OTSem -> ITM ()
 waitOTSem (OTSem t) = do
-  i <- readTVar t
+  i <- readOTVar t
   when (i <= 0) retry
   writeOTVar t $! (i-1)
 
